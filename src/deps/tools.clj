@@ -1,99 +1,181 @@
 (ns deps.tools
   (:require
-   [clojure.tools.deps.alpha.specs :as tools.deps.specs]
    [clojure.spec.alpha :as s]
-   [clojure.set :as set]))
+   [clojure.set :as set]
+   [deps.tools.data :as deps.tools.data]
+   [deps.tools.git :as deps.tools.git]
+   [deps.tools.io :as deps.tools.io]))
 
-(def lib?
-  (partial s/valid? ::tools.deps.specs/lib))
+(def slurp-config deps.tools.io/slurp-config)
 
-(def coord?
-  (partial s/valid? ::tools.deps.specs/coord))
+(defn info
+  "Computes information about `lib`, including the status of its
+  repository, ignoring `deps.tools` localization."
+  ([] (info (slurp-config)))
+  ([config] (into {} (map (fn [[k v]] [k (merge v (info config k))])) config))
+  ([config lib]
+   (let [path            (deps.tools.io/deps-map-path config lib)
+         deps-map        (deps.tools.io/slurp-deps-map path)
+         repo            (deps.tools.git/load-repo path)
+         stash           (deps.tools.git/stash! repo)
+         clean-deps-map  (deps.tools.io/slurp-deps-map path)
+         _               (when stash (deps.tools.git/stash-pop! repo))
+         conf-deps-map   (deps.tools.data/configured-deps-map config clean-deps-map)
+         merged-deps-map (deps.tools.data/merge-deps-maps deps-map conf-deps-map)
+         _               (deps.tools.io/spit-edn! path merged-deps-map)
+         status          (deps.tools.git/status repo)
+         _               (deps.tools.io/spit-edn! path deps-map)
+         lib-set         (deps.tools.data/configured-deps-lib-set config deps-map)
+         branch          (deps.tools.git/branch repo)
+         sha             (deps.tools.git/sha repo)]
+     {::clean-deps-map clean-deps-map
+      ::deps-map       merged-deps-map
+      ::lib-set        lib-set
+      :git/branch      branch
+      :git/status      status
+      :sha             sha})))
 
-(s/def ::tools.deps.specs/config
-  (s/map-of lib? coord?))
+(def slurp-info (comp info slurp-config))
 
-(def config?
-  (partial s/valid? ::tools.deps.specs/config))
+(def visited? deps.tools.data/visited?)
 
-(s/def ::tools.deps.specs/lib-set
-  (s/coll-of lib? :kind set?))
+  ;; TODO: transducers?
+(defn localize-visitor-reduce-fn
+  [acc x]
+  (if (visited? (acc x))
+    acc
+    (update acc
+            x
+            merge
+            {::deps-map (deps.tools.data/localized-deps-map acc (::deps-map (acc x)))
+             ::visited? true})))
 
-(def lib-set?
-  (partial s/valid? ::tools.deps.specs/lib-set))
+(defn localize
+  ([] (localize (slurp-info)))
+  ([info]
+   (->>
+    (deps.tools.data/pre-reduce* deps.tools.data/unvisited-recur? localize-visitor-reduce-fn info (set (keys info)))
+    (deps.tools.data/remove-visited?-kv)))
+  ([info lib]
+   (->>
+    (deps.tools.data/pre-reduce* deps.tools.data/unvisited-recur? localize-visitor-reduce-fn info #{lib})
+    (deps.tools.data/remove-visited?-kv))))
 
-(def deps-map?
-  (partial s/valid? ::tools.deps.specs/deps-map))
+(defn localize!-visitor-reduce-fn
+  [acc x]
+  (let [acc  (localize-visitor-reduce-fn acc x)
+        path (deps.tools.io/deps-map-path acc x)
+        edn  (::deps-map (acc x))]
+    (deps.tools.io/spit-edn! path edn)
+    acc))
 
-(defn extra-deps-lib-set
-  [deps-map]
-  (into
-   #{}
-   (mapcat (comp keys :extra-deps second))
-   (:aliases deps-map)))
+(defn localize!
+  ([] (localize! (slurp-info)))
+  ([info]
+   (->>
+    (deps.tools.data/pre-reduce* deps.tools.data/unvisited-recur? localize!-visitor-reduce-fn info (set (keys info)))
+    (deps.tools.data/remove-visited?-kv)))
+  ([info lib]
+   (->>
+    (deps.tools.data/pre-reduce* deps.tools.data/unvisited-recur? localize!-visitor-reduce-fn info #{lib})
+    (deps.tools.data/remove-visited?-kv))))
 
-(defn strict-deps-lib-set
-  [deps-map]
-  (set (keys (:deps deps-map))))
+(defn ^:private clean?-acc
+  "Used with `deps.tools.data/post-reduce*` to accumulate
+  `:git/clean?` for each dependency in the graph."
+  [acc x]
+  (and
+   (deps.tools.git/clean? (:git/status (acc x)))
+   (reduce
+    (fn [acc x]
+      (if (:git/clean? (acc x))
+        acc
+        (reduced false)))
+    acc
+    (::lib-set (acc x)))))
 
-(defn deps-lib-set
-  [deps-map]
-  (set/union
-   (strict-deps-lib-set deps-map)
-   (extra-deps-lib-set deps-map)))
+(s/def ::plan
+  (s/keys :req [:git/commit-message :git/file-patterns]))
 
-(defn configured-deps-lib-set
-  [config deps-map]
-  (set/intersection
-   (deps-lib-set deps-map)
-   (set (keys config))))
+(def plan?
+  (partial s/valid? ::plan))
 
-(defn parse-configured-extra-deps-kvxf
-  [config [k v]]
-  [k (if (:extra-deps v)
-       (update v :extra-deps select-keys (keys config))
-       v)])
+(defn plan-quit
+  [acc x]
+  (deps.tools.io/prn-plan-quit acc x)
+  (reduced acc))
 
-(defn parse-configured
-  "Subset of `deps.edn` configured in `deps.config.edn`.
-  Same shape as `deps.edn`."
-  [config deps-map]
-  (let [xf (partial parse-configured-extra-deps-kvxf config)]
-    (->
-     (update deps-map :deps select-keys (keys config))
-     (update :aliases (partial into {} (map xf))))))
+(defn plan-visit
+  [acc x plan]
+  (deps.tools.io/prn-plan-summary acc x plan)
+  (update acc x merge plan {::visited? true}))
 
-(defn merge-extra-deps-kvxf
-  [deps-map [k v]]
-  [k (if (:extra-deps v)
-       (update v :extra-deps merge (:extra-deps (k (:aliases deps-map))))
-       v)])
+(defn plan-visitor-reduce-fn
+  [acc x]
+  (cond
+    (reduced? acc)     (reduced acc)
+    (visited? (acc x)) acc
+    (clean?-acc acc x) (update acc x merge {::visited? true :git/clean? true})
+    (plan? (acc x))    (update acc x merge {::visited? true})
+    :else              (let [plan (deps.tools.io/read-plan acc x)]
+                         (if (= ::quit plan)
+                           (reduced (plan-quit acc x))
+                           (plan-visit acc x plan)))))
 
-;; TODO: improve this
-(defn merge-deps-maps
-  [deps-map1 deps-map2]
-  (let [xf (partial merge-extra-deps-kvxf deps-map2)]
-    (->
-     (update deps-map1 :deps merge (:deps deps-map2))
-     (update :aliases (partial into {} (map xf))))))
+(defn plan
+  ([] (plan (slurp-info)))
+  ([info]
+   (->>
+    (deps.tools.data/post-reduce* deps.tools.data/unvisited-recur? plan-visitor-reduce-fn info (set (keys info)))
+    (deps.tools.data/remove-visited?-kv)))
+  ([info lib]
+   (->>
+    (deps.tools.data/post-reduce* deps.tools.data/unvisited-recur? plan-visitor-reduce-fn info #{lib})
+    (deps.tools.data/remove-visited?-kv))))
 
-(defn local-coord-kvxf
-  [[k v]]
-  [k (select-keys v [:local/root])])
+(defn strict-update!
+  [plan lib]
+  (let [path           (deps.tools.io/deps-map-path plan lib)
+        deps-map       (::deps-map (plan lib))
+        deps-map       (deps.tools.data/gitified-deps-map plan deps-map)
+        repo           (deps.tools.git/load-repo path)
+        old-sha        (deps.tools.git/sha repo)
+        file-patterns  (:git/file-patterns (plan lib))
+        commit-message (:git/commit-message (plan lib))
+        dir            (:local/root (plan lib))]
+    (prn '=> 'committing lib)
+    (deps.tools.io/spit-edn! path deps-map)
+    (deps.tools.git/add! repo file-patterns)
+    (deps.tools.git/commit! dir commit-message)
+    (let [new-sha (deps.tools.git/sha repo)]
+      (prn (symbol old-sha) '=> (symbol new-sha))
+      (update plan lib merge {:sha new-sha}))))
 
-(defn git-coord-kvxf
-  [[k v]]
-  [k (select-keys v [:git/url :sha])])
+(defn update!-visit
+  [acc x]
+  (->
+   (strict-update! acc x)
+   (update x merge {::visited? true})))
 
-(defn update-extra-deps-kvxf
-  [coords [k v]]
-  [k (if (:extra-deps v)
-       (update v :extra-deps merge (select-keys coords (keys (:extra-deps v))))
-       v)])
+(defn update!-visitor-reduce-fn
+  [acc x]
+  (cond
+    (reduced? acc)     (reduced acc)
+    (visited? (acc x)) acc
+    (clean?-acc acc x) (update acc x merge {::visited? true :git/clean? true})
+    (plan? (acc x))    (update!-visit acc x)
+    :else              (let [acc (plan-visitor-reduce-fn acc x)]
+                         (if (reduced? acc)
+                           acc
+                           (update!-visit acc x)))))
 
-(defn update-deps-map
-  [coords deps-map]
-  (let [xf (partial update-extra-deps-kvxf coords)]
-    (->
-     (update deps-map :deps merge (select-keys coords (keys (:deps deps-map))))
-     (update :aliases (partial into {} (map xf))))))
+(defn update!
+  ([] (update! (slurp-info)))
+  ([info]
+   (->>
+    (deps.tools.data/post-reduce* deps.tools.data/unvisited-recur? update!-visitor-reduce-fn info (set (keys info)))
+    (deps.tools.data/remove-visited?-kv)))
+  ([info lib]
+   (->>
+    (deps.tools.data/post-reduce* deps.tools.data/unvisited-recur? update!-visitor-reduce-fn info #{lib})
+    (deps.tools.data/remove-visited?-kv))))

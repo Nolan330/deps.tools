@@ -1,34 +1,18 @@
 (ns deps.tools.git
   (:require
+   [clojure.java.shell :as sh]
    [clojure.spec.alpha :as s]
    [clojure.java.io :as io]
-   [clj-jgit.porcelain :as git]
-   [deps.tools.io :as deps.tools.io]
-   [deps.tools :as deps.tools])
+   [clj-jgit.porcelain :as clj-jgit]
+   [deps.tools.data :as deps.tools.data]
+   [deps.tools.io :as deps.tools.io])
   (:import
    (org.eclipse.jgit.api Git)))
-
-(s/def ::git/added set?)
-(s/def ::git/changed set?)
-(s/def ::git/missing set?)
-(s/def ::git/modified set?)
-(s/def ::git/removed set?)
-(s/def ::git/untracked set?)
-
-(s/def ::git/status
-  (s/keys
-   :req-un
-   [::git/added
-    ::git/changed
-    ::git/missing
-    ::git/modified
-    ::git/removed
-    ::git/untracked]))
 
 (defn load-repo*
   ([f] (load-repo* f f))
   ([origin f]
-   (try (git/load-repo f)
+   (try (clj-jgit/load-repo f)
         (catch Exception e
           (if-let [p (.getParent (io/file f))]
             (load-repo* origin p)
@@ -38,9 +22,7 @@
 
 (defn load-repo
   ([config lib]
-   (->>
-    (deps.tools.io/deps-map-path config lib)
-    (load-repo)))
+   (load-repo (:local/root (config lib))))
   ([repo]
    (cond
      (string? repo)       (load-repo* repo)
@@ -50,82 +32,93 @@
                             (str "Unable to coerce as Git repo: " repo)
                             {:repo repo})))))
 
+(s/def ::str-set
+  (s/coll-of string? :kind set?))
+
+(s/def ::clj-jgit/added ::str-set)
+(s/def ::clj-jgit/changed ::str-set)
+(s/def ::clj-jgit/missing ::str-set)
+(s/def ::clj-jgit/modified ::str-set)
+(s/def ::clj-jgit/removed ::str-set)
+(s/def ::clj-jgit/untracked ::str-set)
+
+(s/def ::clj-jgit/status
+  (s/keys
+   :req-un
+   [::clj-jgit/added
+    ::clj-jgit/changed
+    ::clj-jgit/missing
+    ::clj-jgit/modified
+    ::clj-jgit/removed
+    ::clj-jgit/untracked]))
+
+(def status?
+  (partial s/valid? ::clj-jgit/status))
+
 (defn status
   ([config lib]
-   (->>
-    (deps.tools.io/deps-map-path config lib)
-    (status)))
+   (status (:local/root (config lib))))
   ([repo]
-   (->>
-    (load-repo repo)
-    (git/git-status))))
-
-(defn branch
-  ([config lib]
-   (->>
-    (deps.tools.io/deps-map-path config lib)
-    (branch)))
-  ([repo]
-   (->>
-    (load-repo repo)
-    (git/git-branch-current))))
+   (clj-jgit/git-status (load-repo repo))))
 
 (defn clean?
   ([config lib]
+   (clean? (:local/root (config lib))))
+  ([repo-or-status]
    (->>
-    (deps.tools.io/deps-map-path config lib)
-    (clean?)))
+    (if (status? repo-or-status)
+      repo-or-status
+      (status repo-or-status))
+    (vals)
+    (every? empty?))))
+
+(defn branch
+  ([config lib]
+   (branch (:local/root (config lib))))
   ([repo]
-   (every? empty? (vals (status repo)))))
+   (clj-jgit/git-branch-current (load-repo repo))))
 
 (defn log
   ([config lib]
-   (->>
-    (deps.tools.io/deps-map-path config lib)
-    (log)))
+   (log (:local/root (config lib))))
   ([repo]
-   (->>
-    (load-repo repo)
-    (git/git-log))))
+   (clj-jgit/git-log (load-repo repo))))
 
 (defn sha
   ([config lib]
-   (->>
-    (deps.tools.io/deps-map-path config lib)
-    (sha)))
+   (sha (:local/root (config lib))))
   ([repo]
    (.getName (:id (first (log repo))))))
 
 (defn stash!
   ([config lib]
-   (->>
-    (deps.tools.io/deps-map-path config lib)
-    (stash!)))
+   (stash! (:local/root (config lib))))
   ([repo]
-   (->>
-    (load-repo repo)
-    (git/git-stash-create))))
+   (clj-jgit/git-stash-create (load-repo repo))))
 
 (defn stash-pop!
   ([config lib]
-   (->>
-    (deps.tools.io/deps-map-path config lib)
-    (stash-pop!)))
+   (stash-pop! (:local/root (config lib))))
   ([repo]
-   (doto (load-repo repo)
-     (git/git-stash-apply)
-     (git/git-stash-drop :stash-id 0))))
+   (clj-jgit/git-stash-pop (load-repo repo))))
 
-(defn status-ignore-configured
-  [config lib]
-  (let [path    (deps.tools.io/deps-map-path config lib)
-        current (deps.tools.io/slurp-deps-map path)
-        repo    (load-repo path)
-        _       (stash! repo)
-        clean   (deps.tools.io/slurp-configured config path)
-        _       (stash-pop! repo)
-        merged  (deps.tools/merge-deps-maps current clean)
-        _       (deps.tools.io/spit-edn! path merged)
-        status  (status repo)
-        _       (deps.tools.io/spit-edn! path current)]
-    status))
+  ;; TODO: 20191130 `clj-jgit.porcelain/git-add`
+  ;; doesn't accept sets as `file-patterns`
+(s/def :git/file-patterns
+  (s/coll-of string? :kind vector?))
+
+(defn add!
+  ([config lib file-patterns]
+   (add! (:local/root (config lib)) file-patterns))
+  ([repo file-patterns]
+   (clj-jgit/git-add (load-repo repo) file-patterns)))
+
+(s/def :git/commit-message
+  (s/and string? not-empty))
+
+(defn commit!
+  ([config lib message]
+   (commit! (:local/root (config lib)) message))
+  ([dir message]
+     ;; TODO: jgit commit signing
+   (sh/sh "git" "commit" "-m" message :dir dir)))
