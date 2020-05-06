@@ -80,22 +80,34 @@
     (deps.tools.data/pre-reduce* deps.tools.data/unvisited-recur? localize!-visitor-reduce-fn info #{lib})
     (deps.tools.data/remove-visited?-kv))))
 
+(defn ^:private clean?-reduce-fn
+  [deps-seq acc lib]
+  (if (and
+       (:git/clean? (acc lib))
+       (->>
+        (filter lib deps-seq)
+        (every? (comp (hash-set (:sha (acc lib))) :sha lib))))
+    acc
+    (reduced false)))
+
 (defn ^:private clean?-acc
   "Used with `deps.tools.data/post-reduce*` to accumulate
   `:git/clean?` for each dependency in the graph."
   [acc x]
   (and
    (deps.tools.git/clean? (:git/status (acc x)))
-   (reduce
-    (fn [acc x]
-      (if (:git/clean? (acc x))
-        acc
-        (reduced false)))
-    acc
-    (::lib-set (acc x)))))
+   (let [lib-set  (::lib-set (acc x))
+         deps-seq (->>
+                   (:deps.tools/clean-deps-map (acc x))
+                   (deps.tools.data/configured-deps-seq acc))
+         rf       (partial clean?-reduce-fn deps-seq)]
+     (reduce rf acc lib-set))))
 
 (s/def ::plan
-  (s/keys :req [:git/commit-message :git/file-patterns]))
+  (s/keys
+   :req
+   [:git/commit-message
+    :git/file-patterns]))
 
 (def plan?
   (partial s/valid? ::plan))

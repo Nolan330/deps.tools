@@ -73,6 +73,13 @@
           (update deps-map :aliases (partial into {} (map xf))))
         deps-map)))))
 
+(defn configured-deps-seq
+  [config deps-map]
+  (let [conf-deps-map (configured-deps-map config deps-map)]
+    (cons
+     (:deps conf-deps-map)
+     (map :extra-deps (vals (:aliases conf-deps-map))))))
+
 (defn merge-extra-deps-kvxf
   [deps-map [k v]]
   [k (if (:extra-deps v)

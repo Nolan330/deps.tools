@@ -77,7 +77,7 @@
          (do
            (prn commit-message)
            commit-message)
-         (let [default (str "Updating " x " dependencies")]
+         (let [default (str "Synchronizing " x " dependencies")]
            (prn 'DEFAULT default)
            default))))))
 
