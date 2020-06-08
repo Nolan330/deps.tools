@@ -157,7 +157,7 @@
         dir            (:local/root (plan lib))]
     (prn '=> 'committing lib)
     (deps.tools.io/spit-edn! path deps-map)
-    (deps.tools.git/add! repo file-patterns)
+    (deps.tools.git/add! plan lib file-patterns)
     (deps.tools.git/commit! dir commit-message)
     (let [new-sha (deps.tools.git/sha repo)]
       (prn (symbol old-sha) '=> (symbol new-sha))

@@ -63,8 +63,8 @@
            (prn file-patterns)
            file-patterns)
          (do
-           (prn 'DEFAULT '(add all files))
-           ["."]))))))
+           (prn 'DEFAULT '(deps.edn))
+           ["deps.edn"]))))))
 
 (defn read-commit-message
   [acc x]

@@ -1,13 +1,15 @@
 (ns deps.tools.git
   (:require
    [clojure.java.shell :as sh]
-   [clojure.spec.alpha :as s]
    [clojure.java.io :as io]
+   [clojure.spec.alpha :as s]
+   [clojure.string :as string]
    [clj-jgit.porcelain :as clj-jgit]
    [deps.tools.data :as deps.tools.data]
    [deps.tools.io :as deps.tools.io])
   (:import
-   (org.eclipse.jgit.api Git)))
+   [java.nio.file Path Paths]
+   [org.eclipse.jgit.api Git]))
 
 (defn load-repo*
   ([f] (load-repo* f f))
@@ -107,9 +109,37 @@
 (s/def :git/file-patterns
   (s/coll-of string? :kind vector?))
 
+(defn local-root->repo-root
+  [local-root]
+  (let [git-root
+        (->>
+         (load-repo local-root)
+         (.getRepository)
+         (.getDirectory)
+         (str))]
+    (->>
+     (string/split git-root #"/")
+     (drop-last)
+     (string/join "/"))))
+
+(defn -relativize-xf
+  [local-root repo-root local-file-pattern]
+  (let [absolute-local-path (Paths/get
+                             (str local-root "/" local-file-pattern)
+                             (into-array String []))
+        repo-root-path      (Paths/get
+                             repo-root
+                             (into-array String []))]
+    (str (.relativize repo-root-path absolute-local-path))))
+
 (defn add!
   ([config lib file-patterns]
-   (add! (:local/root (config lib)) file-patterns))
+   (let [local-root    (:local/root (config lib))
+         repo-root     (local-root->repo-root local-root)
+         file-patterns (mapv
+                        (partial -relativize-xf local-root repo-root)
+                        file-patterns)]
+     (add! repo-root file-patterns)))
   ([repo file-patterns]
    (clj-jgit/git-add (load-repo repo) file-patterns)))
 
