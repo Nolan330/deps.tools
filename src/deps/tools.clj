@@ -39,6 +39,89 @@
 
 (def visited? deps.tools.data/visited?)
 
+(comment
+
+    ;; NOTE: "compound recursive context" vs. "entity relation"
+  (def info (info))
+
+  (first info)
+
+  (require '[datascript.core :as d])
+
+  (def schema
+    {:deps.tools/lib-set {:db/cardinality :db.cardinality/many
+                          :db/type        :db.type/ref
+                          :db/index       true}
+     :deps.tools/lib     {:db/unique :db.unique/identity}})
+
+  (def conn (d/create-conn schema))
+
+    ;; NOTE:
+    ;; a   b
+    ;; |\ /
+    ;; | c
+    ;; |/
+    ;; d
+  (def db1
+    (d/db-with
+     (d/db conn)
+     [{:deps.tools/lib "libA"}
+      {:deps.tools/lib "libB"}
+      {:deps.tools/lib "libC"
+       :deps.tools/lib-set
+       [{:deps.tools/lib "libA"}
+        {:deps.tools/lib "libB"}]}
+      {:deps.tools/lib "libD"
+       :deps.tools/lib-set
+       [{:deps.tools/lib "libA"}
+        {:deps.tools/lib "libC"}]}]))
+
+  (d/pull
+   db1
+   '[* {:deps.tools/lib-set
+        [* {:deps.tools/lib-set
+            [* {:deps.tools/lib-set [*]}]}]}]
+   [:deps.tools/lib "libD"])
+
+  (d/q
+   '[:find (pull ?e [*])
+     :in $
+     :where
+     [?e :deps.tools/lib _]]
+   db1)
+
+  (d/q
+   '[:find (pull ?e2 [*])
+     :in $ [?lib ...]
+     :where
+     [?e1 :deps.tools/lib ?lib]
+     [?e2 :deps.tools/lib-set ?e1]]
+   db1
+   ["libA" "libB" "libC"])
+
+  (d/pull
+   db1
+   '[:deps.tools/_lib-set]
+   [:deps.tools/lib "libA"])
+
+  (d/pull-many
+   db1
+   '[:deps.tools/_lib-set]
+   [[:deps.tools/lib "libA"]
+    [:deps.tools/lib "libC"]])
+
+    ;; NOTE: vs. e.g.
+  (let [query-ks #{'nuid/bn}]
+    (filter
+     (fn [[_k v]]
+       (some
+        (partial contains? (:deps.tools/lib-set v))
+        query-ks))
+     info))
+
+  ;;;
+  )
+
   ;; TODO: transducers?
 (defn localize-visitor-reduce-fn
   [acc x]
