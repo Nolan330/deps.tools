@@ -48,6 +48,27 @@
 
   (require '[datascript.core :as d])
 
+    ;; TODO: adopt `tools.deps` names where applicable
+  (def schema
+    {:deps.tools/managed-coordinates {:db/cardinality :db.cardinality/many
+                                      :db/type        :db.type/ref
+                                      :db/index       true}
+     :tools.deps/lib-,,,             {:db/unique :db.unique/identity}})
+
+  :tools.deps/coordinate
+  {:tools.deps/lib-,,, ,,,         ; NOTE: keys of `:deps`
+   :mvn/version ,,,                ; NOTE: traditional coord keys
+   :git/url ,,,
+   :sha ,,,
+   :exclusions ,,,                 ; NOTE: tools.deps keys
+   :deps.tools/managed-coordinates [,,,] ; NOTE: refs
+   :deps.tools/clean-deps-map ,,,  ; NOTE: as before
+   :deps.tools/deps-map ,,,
+   :git/branch ,,,
+   :git/status ,,,
+   ,,,
+   }
+
   (def schema
     {:deps.tools/lib-set {:db/cardinality :db.cardinality/many
                           :db/type        :db.type/ref
@@ -98,6 +119,16 @@
      [?e2 :deps.tools/lib-set ?e1]]
    db1
    ["libA" "libB" "libC"])
+
+  (d/q
+   '[:find (pull ?e [*])
+     :in $ [?ref ...]
+     :where
+     [?e :deps.tools/lib-set ?ref]]
+   db1
+   [[:deps.tools/lib "libA"]
+    [:deps.tools/lib "libB"]
+    [:deps.tools/lib "libC"]])
 
   (d/pull
    db1
