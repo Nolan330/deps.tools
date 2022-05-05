@@ -14,6 +14,7 @@
   ([] (info (slurp-config)))
   ([config] (into {} (map (fn [[k v]] [k (merge v (info config k))])) config))
   ([config lib]
+   (prn 'info (symbol lib))
    (let [path            (deps.tools.io/deps-map-path config lib)
          deps-map        (deps.tools.io/slurp-deps-map path)
          repo            (deps.tools.git/load-repo path)
