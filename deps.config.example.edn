@@ -1,7 +1,3 @@
 {deps/tools
- {:local/root "/Users/example/dev/deps.tools",
-  :git/url    "https://github.com/nolan330/deps.tools"},
-
- nuid/zk
- {:local/root "/Users/example/dev/nuid/zk"
-  :git/url    "https://github.com/nuid/zk.git"}}
+ {:local/root "/Users/example/dev/example-repo",
+  :git/url    "https://github.com/exampleuser/example-repo.git"},}

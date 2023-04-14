@@ -4,7 +4,7 @@
    [clojure.java.io :as io]
    [clojure.pprint :as pprint]
    [clojure.string :as str]
-   [deps.tools.data :as deps.tools.data]))
+   [deps.tools.data :as data]))
 
 (defn slurp-config
   ([] (slurp-config (str (System/getProperty "user.home") "/.clojure/deps.config.edn")))
@@ -21,11 +21,11 @@
 (defn slurp-configured-deps-map
   [config lib-or-path]
   (->>
-   (if (deps.tools.data/lib? lib-or-path)
+   (if (data/lib? lib-or-path)
      (deps-map-path config lib-or-path)
      lib-or-path)
    (tools.deps.io/slurp-edn)
-   (deps.tools.data/configured-deps-map config)))
+   (data/configured-deps-map config)))
 
 (defn spit-edn!
   [path data]

@@ -4,9 +4,7 @@
    [clojure.java.io :as io]
    [clojure.spec.alpha :as s]
    [clojure.string :as string]
-   [clj-jgit.porcelain :as clj-jgit]
-   [deps.tools.data :as deps.tools.data]
-   [deps.tools.io :as deps.tools.io])
+   [clj-jgit.porcelain :as clj-jgit])
   (:import
    [java.nio.file Path Paths]
    [org.eclipse.jgit.api Git]))
